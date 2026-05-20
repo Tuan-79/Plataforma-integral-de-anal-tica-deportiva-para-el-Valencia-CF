@@ -1,16 +1,17 @@
 import pandas as pd # type: ignore
 import psycopg2 # type: ignore
 from sklearn.ensemble import RandomForestRegressor # type: ignore
-from sklearn.model_selection import train_test_split # type: ignore
-from sklearn.metrics import mean_absolute_error # type: ignore
+from sklearn.model_selection import train_test_split, cross_val_score # type: ignore
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score # type: ignore
 import numpy as np # type: ignore
+import matplotlib.pyplot as plt # type: ignore # 
 
 print("=============================================")
 print(" INICIANDO MOTOR DE IA: RANDOM FOREST")
 print("=============================================")
 
 try:
-    # 1. CONEXIÓN Y EXTRACCIÓN (Leyendo el pasado)
+    # 1. CONEXIÓN Y EXTRACCIÓN
     print(" Conectando a PostgreSQL y extrayendo datos...")
     conn = psycopg2.connect(
         host="localhost", database="TFG", user="postgres", password="scadelantero4"
@@ -25,7 +26,10 @@ try:
         JOIN dim_jugador j ON h.jugador_id = j.id
         WHERE h.valor_mercado_€ > 0 -- Solo entrenamos con jugadores que tienen valor
     """
-    df = pd.read_sql_query(query, conn)
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        df = pd.read_sql_query(query, conn)
     
     # 2. PREPARACIÓN DE DATOS (Feature Engineering)
     print(f" Datos cargados: {len(df)} jugadores encontrados.")
@@ -44,19 +48,59 @@ try:
     
     print(" Entrenando el modelo Random Forest (100 árboles de decisión)...")
     modelo = RandomForestRegressor(n_estimators=100, random_state=42)
-    modelo.fit(X_train, y_train) # ¡Aquí ocurre la magia matemática!
+    modelo.fit(X_train, y_train)
     
-    # Evaluamos qué tan bueno es el modelo en el examen
+    # --- INICIO DE LA EVALUACIÓN AVANZADA
+    print("\n --- EVALUACIÓN DE RIGOR CIENTÍFICO ---")
     predicciones_test = modelo.predict(X_test)
+    
+    # Métricas estándar
     mae = mean_absolute_error(y_test, predicciones_test)
-    print(f" Error Absoluto Medio del modelo: {mae:,.0f} €")
+    r2 = r2_score(y_test, predicciones_test)
+    rmse = np.sqrt(mean_squared_error(y_test, predicciones_test))
+    mape = np.mean(np.abs((y_test - predicciones_test) / np.where(y_test==0, 1, y_test))) * 100
+
+    # Validación cruzada k=5
+    scores_cv = cross_val_score(modelo, X, y, cv=5, scoring='neg_mean_absolute_error')
+    mae_cv = -scores_cv.mean()
+    std_cv = scores_cv.std()
+    
+    # Baseline: predecir siempre la media
+    baseline_mae = np.mean(np.abs(y_test - y_train.mean()))
+
+    print(f" R² = {r2:.3f}")
+    print(f" RMSE = {rmse:,.0f} €")
+    print(f" MAPE = {mape:.1f} %")
+    print(f" MAE Original = {mae:,.0f} €")
+    print(f" MAE CV (k=5) = {mae_cv:,.0f} € ± {std_cv:,.0f} €")
+    print(f" Baseline (predecir media): MAE = {baseline_mae:,.0f} €")
+    
+    # Importancia de variables
+    print("\n Importancia de variables:")
+    importancias = sorted(zip(features, modelo.feature_importances_), key=lambda x: -x[1])
+    for f, imp in importancias:
+        print(f"  - {f}: {imp:.3f}")
+
+    # Generar y guardar el gráfico solicitado
+    nombres_features = [x[0] for x in importancias]
+    valores_importancia = [x[1] for x in importancias]
+    
+    plt.figure(figsize=(10, 6))
+    plt.barh(nombres_features[::-1], valores_importancia[::-1], color='#1f77b4')
+    plt.xlabel('Importancia Relativa')
+    plt.title('Importancia de las Variables (Feature Importance - Random Forest)')
+    plt.grid(axis='x', linestyle='--', alpha=0.7)
+    plt.tight_layout()
+    plt.savefig('feature_importance.png')
+    print(" [!] Gráfico de importancia guardado como 'feature_importance.png'.")
+    print(" --------------------------------------\n")
+    # --- FIN DE LA EVALUACIÓN AVANZADA ---
     
     # 4. PREDICCIÓN GLOBAL Y CÁLCULO DE OPORTUNIDADES
     print(" Prediciendo el valor justo para toda LaLiga...")
     df['valor_predictivo_€'] = modelo.predict(X)
     
-    # Métrica CLAVE de negocio: ¿Está barato o caro?
-    # Si la IA dice que vale 10M y cuesta 2M, el desfase es +8M (Gema Oculta)
+    # Métrica CLAVE de negocio:
     df['desfase_mercado_€'] = df['valor_predictivo_€'] - df['valor_mercado_€']
 
     # 5. CARGA EN BASE DE DATOS (Modificando PostgreSQL)
